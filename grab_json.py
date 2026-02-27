@@ -1,19 +1,15 @@
-import json
 import mysql.connector
 import time
 import gzip
 import json
 import os
+from Mysql_con_cre_ins import connection
 a = time.time()
 
-conn = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="actowiz"
-)
-cursor = conn.cursor()
 
-path = r"C:\Users\yash.limbasiya\Desktop\grab_food_pages"# file path to the JSON data
+conn = connection()
+cursor = conn.cursor()
+path = r'C:\Users\yash.limbasiya\Desktop\grab_food_pages' # file path to the JSON data
 
 def grab_json(file_path): # load JSON data from the specified file path
     files_app = []
@@ -167,16 +163,34 @@ INSERT IGNORE INTO restaurant (
 
 
 # batches 
-batch_procesing = 500
+batch_procesing = 2000
+# 1. Define queries ONCE outside the loop
+restaurant_insert_query = """
+INSERT IGNORE INTO restaurant (
+    id, name, address, restaurant_logo, timeZone,
+    estimated_delivery_time, distanceInKm, tips,
+    rating, voteCount, deliverBy, radius,
+    open_status, displayedHours, sun, mon, tue, wed, thu, fri, sat
+) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+"""
 
-restaurant_batch = [] # insert the data 
+menu_insert_query = """
+INSERT IGNORE INTO menu_item (
+    item_id, restaurant_id, category_name,
+    name, available, price_rm, imgHref, description
+) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+"""
 
-# LOOP FIXED HERE
+# 2. Lists to hold batches
+restaurant_data_list = []
+menu_data_list = []
+
 for restaurant in result:
 
     timing = restaurant.get("timing", {})
-
-    restaurant_values = (
+    
+    # Prepare Restaurant Row
+    restaurant_data_list.append((
         restaurant.get("id"),
         restaurant.get("name"),
         restaurant.get("cuisine"),
@@ -198,21 +212,12 @@ for restaurant in result:
         timing.get("thu"),
         timing.get("fri"),
         timing.get("sat")
-    )
+    ))
 
-    cursor.execute(restaurant_insert_query, restaurant_values)
-
-    # Insert Menu Items
-    menu_insert_query = """
-    INSERT IGNORE INTO menu_item (
-        item_id, restaurant_id, category_name,
-        name, available, price_rm, imgHref, description
-    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """
-
+    # Prepare Menu Rows
     for category_name, items in restaurant.get("menu", {}).items():
         for item in items:
-            menu_values = (
+            menu_data_list.append((
                 item.get("item_id"),
                 restaurant.get("id"),
                 category_name,
@@ -221,8 +226,19 @@ for restaurant in result:
                 item.get("RM price"),
                 item.get("imgHref"),
                 item.get("description")
-            )
-            cursor.execute(menu_insert_query, menu_values)
+            ))
+
+# 3. Execute in Batches
+# Fast insertion for restaurants
+if restaurant_data_list:
+    for i in range(0, len(restaurant_data_list), batch_procesing):
+        cursor.executemany(restaurant_insert_query, restaurant_data_list[i:i+batch_procesing])
+
+# Fast insertion for menu items
+if menu_data_list:
+    # If menu_data_list is huge (e.g., 50k+ rows), process in chunks of 2000
+    for i in range(0, len(menu_data_list), 500):
+        cursor.executemany(menu_insert_query, menu_data_list[i:i+2000])
 
 conn.commit()
 
